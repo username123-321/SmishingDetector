@@ -4,6 +4,9 @@ import sys
 import time
 import traceback
 import random
+import json
+from typing import Optional, Tuple, Dict
+from datetime import datetime
 
 # --- TCP Configuration ---
 # Use an empty string for the hostname to listen on all available interfaces (0.0.0.0)
@@ -91,6 +94,63 @@ class NetworkSMSReceiver:
         self.thread = None
         self.log_callback("Network server stopped.", "Info")
         self._update_ui_status_safe("Stopped")
+    
+    @staticmethod
+    def extract_sms_data(raw_request_data: bytes) -> Optional[Dict[str, str]]:
+        # 1. DEFINE THE HEADER/BODY SEPARATOR
+        # HTTP headers are separated from the body by a double newline.
+        SEPARATOR = b'\r\n\r\n'
+        
+        # 2. ISOLATE THE JSON BODY
+        try:
+            # Find the index where the headers end
+            separator_index = raw_request_data.index(SEPARATOR)
+            
+            # The body starts immediately after the separator
+            body_raw = raw_request_data[separator_index + len(SEPARATOR):]
+            
+        except ValueError:
+            print("Parser Error: Could not find end of HTTP headers in received data.")
+            return None
+        
+        # 3. DECODE AND PARSE THE JSON
+        try:
+            # Decode the bytes into a string
+            json_string = body_raw.decode('utf-8').strip()
+            
+            # Parse the JSON string into a Python dictionary
+            sms_data_dict: Dict = json.loads(json_string)
+            
+        except UnicodeDecodeError:
+            print("Parser Error: Failed to decode request body using UTF-8.")
+            return None
+        except json.JSONDecodeError as e:
+            print(f"Parser Error: Failed to parse JSON. Details: {e}")
+            return None
+
+        # 4. FILTER/EXTRACT THE REQUIRED FIELDS
+        
+        # Use .get() for safe extraction
+        sms_message = sms_data_dict.get('message', '--- MESSAGE FIELD MISSING ---')
+        sender = sms_data_dict.get('sender', '--- SENDER FIELD MISSING ---')
+        timestamp_ms = sms_data_dict.get('timestamp') # This is the time in milliseconds
+        
+        # 5. PROCESS TIMESTAMP (The new step)
+        formatted_time = '--- TIME DATA MISSING ---'
+        if isinstance(timestamp_ms, (int, float)):
+            # Convert milliseconds to seconds (Python's datetime expects seconds)
+            timestamp_s = timestamp_ms / 1000
+            
+            # Create a datetime object and format it
+            dt_object = datetime.fromtimestamp(timestamp_s)
+            formatted_time = dt_object.strftime('%Y-%m-%d %H:%M:%S')
+
+        # 6. Return the classified data as a dictionary for cleaner usage
+        return {
+            "message": sms_message,
+            "sender": sender,
+            "time": formatted_time
+        }
 
 
     # ---------- Background Server Thread ----------
@@ -144,8 +204,7 @@ class NetworkSMSReceiver:
                     break
                 
                 # Decode the received data
-                message = data.decode('utf-8').strip()
-                
+                message = NetworkSMSReceiver.extract_sms_data(data)
                 # --- Simulating SMS Data Transfer ---
                 # Since the phone app sends a string, we treat it as the SMS content.
                 if message:

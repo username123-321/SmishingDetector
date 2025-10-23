@@ -11,6 +11,7 @@ from components.intro_screen import IntroScreen
 import math
 from functools import lru_cache
 from components.user_verification import UserVerification
+from flask import Flask, request, jsonify
 
 # --- IMPORTS FOR NETWORK INTEGRATION (TCP/IP) ---
 import threading 
@@ -143,7 +144,13 @@ def show_error_popup(parent, title, message):
     ).pack(pady=(0, 10))
     
 # --- Reusable Prediction Core Logic ---
-def process_message_for_prediction(text, source="Manual Input"):
+def process_message_for_prediction(sms, sender="Unknown"):
+    if type(sms) == dict:
+        time = sms['time']
+        sender = sms['sender']
+        text = sms['message']
+    else:
+        text = sms
     """
     Core logic for cleaning, predicting, and logging a message.
     """
@@ -151,7 +158,7 @@ def process_message_for_prediction(text, source="Manual Input"):
         show_error_popup(
             parent=root,
             title="Model Not Loaded",
-            message=f"Received message from {source}, but the prediction model is not loaded. Please check your model file."
+            message=f"Received message from {sender}, but the prediction model is not loaded. Please check your model file."
         )
         return
 
@@ -170,10 +177,8 @@ def process_message_for_prediction(text, source="Manual Input"):
         label_display = "Legit" if str(label).lower() == "ham" else str(label).capitalize()
         
         if label_display != "Legit":
-            # Only apply user verification for manual input
-            if source == "Manual Input":
                 verifier = UserVerification(root, text, label_display)
-                label_display = verifier.ask_user() 
+                label_display = verifier.ask_user(sender) 
         
         # Build warnings list
         warnings_list = []
@@ -193,10 +198,10 @@ def process_message_for_prediction(text, source="Manual Input"):
         show_error_popup(
             parent=root,
             title="Prediction Fail",
-            message=f"Prediction failed for message from {source}: {e}"
+            message=f"Prediction failed for message from {sender}: {e}"
         )
         # Log the failure as an 'Error' system message
-        add_log(f"Prediction failed for message from {source}: {e}", "Error") 
+        add_log(f"Prediction failed for message from {sender}: {e}", "Error") 
 
 def predict_action():
     """Handles prediction for manual text input."""
@@ -213,15 +218,16 @@ def predict_action():
         )
         return
 
-    process_message_for_prediction(text, source="Manual Input")
+    process_message_for_prediction(text, sender = "Unknown")
     clear_input()
 
 # --- Network Handlers ---
-def on_sms_received_callback(message):
+
+def on_sms_received_callback(sms_message):
     """
     Called by the Network thread (via root.after) to pass message to the main thread.
     """
-    process_message_for_prediction(message, source="Network")
+    process_message_for_prediction(sms_message, sender = "Unknown")
 
 def _toggle_server_wrapper():
     """Wrapper function called by the Toplevel window's button to start/stop the server."""
@@ -351,6 +357,8 @@ def bluetooth_connect_action():
                 on_sms_received_callback, # Function to receive SMS data
                 add_log # Function to receive system messages
             )
+
+
         except Exception as e:
             # Catch general setup failure (e.g., if socket module is somehow missing)
             show_error_popup(

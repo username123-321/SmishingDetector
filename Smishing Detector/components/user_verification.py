@@ -2,18 +2,17 @@ import tkinter as tk
 from tkinter import ttk
 
 class UserVerification:
-    def __init__(self, root, comp_name, model_result):
+    def __init__(self, root, text, model_result):
         """
         root: main Tk window or parent frame
-        comp_name: the SMS text that was classified
         model_result: predicted label (e.g., 'Smish', 'Spam', 'Ham')
         """
         self.root = root
-        self.comp_name = comp_name
+        self.text = text[0:20]
         self.model_result = model_result
         self.result = None
 
-    def ask_user(self):
+    def ask_user(self, sender = "Unknown"):
         """Show modern dark-themed popup asking for user confirmation."""
         self.popup = tk.Toplevel(self.root)
         self.popup.title("Message Verification")
@@ -56,8 +55,8 @@ class UserVerification:
 
         msg = tk.Message(
             self.popup,
-            text=f"Message:\n\"{self.comp_name[:80]}...\"\n\n"
-                 "Were you expecting this message from the sender/site?",
+            text=f"Message:\n\"{self.text}...\"\n\n"
+                f"Were you expecting this message from the {sender}?",
             bg="#1e1e1e", fg="white", width=360, font=("Arial", 12)
         )
         msg.pack(padx=10, pady=(5, 20))
