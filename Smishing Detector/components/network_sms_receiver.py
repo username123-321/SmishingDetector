@@ -10,7 +10,7 @@ from datetime import datetime
 
 # --- TCP Configuration ---
 # Use an empty string for the hostname to listen on all available interfaces (0.0.0.0)
-HOST = '' 
+HOST = '0.0.0.0' 
 PORT = 65432       # Port to listen on (non-privileged ports are > 1023)
 BUFFER_SIZE = 1024 # Size of buffer for receiving data
 
@@ -81,7 +81,7 @@ class NetworkSMSReceiver:
             try:
                 # Unblock socket.accept() by connecting a temporary socket to itself
                 temp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                temp_sock.connect(('127.0.0.1', self.server_socket.getsockname()[1]))
+                temp_sock.connect(('0.0.0.0', self.server_socket.getsockname()[1]))
                 temp_sock.close()
                 self.server_socket.close()
             except Exception:
