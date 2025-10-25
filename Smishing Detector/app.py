@@ -146,7 +146,6 @@ def show_error_popup(parent, title, message):
 # --- Reusable Prediction Core Logic ---
 def process_message_for_prediction(sms, sender="Unknown"):
     if type(sms) == dict:
-        time = sms['time']
         sender = sms['sender']
         text = sms['message']
     else:
@@ -224,10 +223,27 @@ def predict_action():
 # --- Network Handlers ---
 
 def on_sms_received_callback(sms_message):
-    """
-    Called by the Network thread (via root.after) to pass message to the main thread.
-    """
-    process_message_for_prediction(sms_message, sender = "Unknown")
+    
+    message = sms_message['message']
+    sender = sms_message['sender']
+    user = sms_message['phoneNumber']
+    device_name = sms_message['deviceName']
+    sent_time = sms_message['time']
+    take_details(user, device_name, sent_time)
+    process_message_for_prediction(message, sender = sender)
+
+details_dict = {}
+
+def add_detail(detail_name, detail):
+    global details_dict
+    details_dict[detail_name] = detail
+
+def take_details(user, device_name, sent_time):
+    add_detail("user_phone", user)
+    add_detail("device_name", device_name)
+    add_detail("sent_time", sent_time)
+
+
 
 def _toggle_server_wrapper():
     """Wrapper function called by the Toplevel window's button to start/stop the server."""
@@ -270,10 +286,10 @@ class NetworkConnectWindow(tk.Toplevel):
             self.host_ip = s.getsockname()[0]
             s.close()
         except socket.gaierror:
-            self.host_ip = "127.0.0.1"
+            self.host_ip = "0.0.0.0"
         except OSError:
             # Fallback if no network connection is available
-            self.host_ip = "127.0.0.1 (No network)"
+            self.host_ip = "0.0.0.0 (No network)"
             
         self.port = PORT
         
@@ -484,19 +500,14 @@ def on_log_double_click(event):
     data = message_store[original_index]
     message_content = data.get("message")
 
-    # --- NEW LOGIC: Load content into Input Box ---
+    # --- Load content into input box ---
     if message_content:
-        # 1. Clear input box
         input_box.delete("1.0", tk.END)
-        # 2. Insert message content
         input_box.insert(tk.END, message_content)
-        # 3. Ensure input box is active and showing white text
-        input_box.config(fg="white") 
-        # 4. Give focus (optional but helpful)
+        input_box.config(fg="white")
         input_box.focus_set()
 
-
-    # If the same item is clicked AND the details panel is open, close it.
+    # --- Toggle behavior (close panel if same item clicked) ---
     if current_detailed_index == original_index and details_visible[0]:
         toggle_details()
         return
@@ -504,12 +515,15 @@ def on_log_double_click(event):
     details_text.config(state="normal")
     details_text.delete("1.0", tk.END)
 
-    # Clear previous tags
+    # --- Define visual tags ---
     for tag in details_text.tag_names():
         details_text.tag_delete(tag)
 
-    # Define new tags for readability
-    details_text.tag_config("header", font=("Consolas", 14, "bold"), foreground="#ff4800") 
+    details_text.tag_config("header", font=("Consolas", 14, "bold"), foreground="#ff4800")
+    details_text.tag_config("subheader", font=("Consolas", 12, "bold"), foreground="#00bfff")
+    details_text.tag_config("device_name", font=("Consolas", 12, "italic"), foreground="cyan")
+    details_text.tag_config("user_phone", font=("Consolas", 12, "italic"), foreground="#9cdcfe")
+    details_text.tag_config("sent_time", font=("Consolas", 12, "italic"), foreground="#b5cea8")
     details_text.tag_config("prediction_smishing", font=("Consolas", 13, "bold"), foreground="red")
     details_text.tag_config("prediction_spam", font=("Consolas", 13, "bold"), foreground="orange")
     details_text.tag_config("prediction_legit", font=("Consolas", 13, "bold"), foreground="green")
@@ -518,13 +532,14 @@ def on_log_double_click(event):
     details_text.tag_config("warning_email", font=("Consolas", 12, "italic"), foreground="red")
     details_text.tag_config("warning_phone", font=("Consolas", 12, "italic"), foreground="red")
     details_text.tag_config("warning_domain", font=("Consolas", 12, "italic"), foreground="red")
-    details_text.tag_config("warning_other", font=("Consolas", 12, "italic"), foreground="#ff80ff") 
+    details_text.tag_config("warning_other", font=("Consolas", 12, "italic"), foreground="#ff80ff")
 
+    # --- Populate the details ---
     if data["message"] is None:
         details_text.insert("end", "ℹ️ System Message\n", "header")
         details_text.insert("end", f"[{data['label']}] {log_list.get(selection[0])[len(data['label'])+3:].strip()}", "message")
     else:
-        # Prediction label with color
+        # Prediction section
         label_lower = data["label"].lower()
         if label_lower == "smishing":
             pred_tag = "prediction_smishing"
@@ -535,16 +550,28 @@ def on_log_double_click(event):
         else:
             pred_tag = "message"
 
-        details_text.insert("end", "📌 Prediction:\n", "header")
+        # 🟢 Header Section
+        details_text.insert("end", "📱 Message Details\n", "header")
+
+        # Phone number
+        user_phone = details_dict["user_phone"]
+        details_text.insert("end", f"• User Phone: {user_phone}\n", "user_phone")
+
+        # Device name
+        device_name = details_dict["device_name"]
+        details_text.insert("end", f"• Device Name: {device_name}\n", "device_name")
+
+        # Sent time
+        sent_time = details_dict["sent_time"]
+        details_text.insert("end", f"• Sent Time: {sent_time}\n\n", "sent_time")
+
+        # Prediction label
+        details_text.insert("end", "📌 Prediction:\n", "subheader")
         details_text.insert("end", f"{data['label']}\n\n", pred_tag)
 
-        # REMOVED redundancy: The main message is now in the Input Box for editing.
-        # details_text.insert("end", "💬 Original Message:\n", "header")
-        # details_text.insert("end", f"{data['message']}\n\n", "message") 
-
-        # Warnings with proper indentation and color
+        # Warnings
         if data.get("warnings"):
-            details_text.insert("end", "⚠️ Detections:\n", "header")
+            details_text.insert("end", "⚠️ Detections:\n", "subheader")
             for w in data["warnings"]:
                 if w.startswith("URLs:"):
                     details_text.insert("end", f"   - {w}\n", "warning_url")
@@ -557,16 +584,17 @@ def on_log_double_click(event):
                 else:
                     details_text.insert("end", f"   - {w}\n", "warning_other")
         else:
-            details_text.insert("end", "✅ No suspicious features detected.", "prediction_legit")
-    
-    
+            details_text.insert("end", "✅ No suspicious features detected.\n", "prediction_legit")
+
+    # --- Finalize view ---
     details_text.config(state="disabled")
     details_text.see("1.0")
 
-    if details_visible[0] == False:
+    if not details_visible[0]:
         toggle_details()
     
     current_detailed_index = original_index
+
 
 
 def on_log_right_click(event):
