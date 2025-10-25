@@ -28,8 +28,8 @@ def resource_path(relative_path):
     return os.path.join(base_path, relative_path)
 
 # Paths
-MODEL_PATH = resource_path("sms_model.joblib")
-VECTORIZER_PATH = resource_path('tfidf_vectorizer.joblib')
+MODEL_PATH = resource_path("model/sms_model.joblib")
+VECTORIZER_PATH = resource_path('model/tfidf_vectorizer.joblib')
 
 if not os.path.exists(MODEL_PATH):
     print(f"WARNING: Model file '{MODEL_PATH}' not found. Prediction disabled.")
@@ -554,15 +554,15 @@ def on_log_double_click(event):
         details_text.insert("end", "📱 Message Details\n", "header")
 
         # Phone number
-        user_phone = details_dict["user_phone"]
+        user_phone = details_dict.get("user_phone", "No Phone Number")
         details_text.insert("end", f"• User Phone: {user_phone}\n", "user_phone")
 
         # Device name
-        device_name = details_dict["device_name"]
+        device_name = details_dict.get("device_name", "No Device Name")
         details_text.insert("end", f"• Device Name: {device_name}\n", "device_name")
 
         # Sent time
-        sent_time = details_dict["sent_time"]
+        sent_time = details_dict.get("sent_time", "No Sent Time")
         details_text.insert("end", f"• Sent Time: {sent_time}\n\n", "sent_time")
 
         # Prediction label
