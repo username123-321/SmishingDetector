@@ -110,22 +110,7 @@ class NetworkSMSReceiver:
             img = qrcode.make(payload)
             qr_path = Path.cwd() / "connection_qr.png"
             img.save(qr_path)
-
-            qr_win = tk.Toplevel(self.root)
-            qr_win.title("📡 Scan to Connect")
-
-            qr_image = ImageTk.PhotoImage(img)
-            lbl_img = tk.Label(qr_win, image=qr_image)
-            lbl_img.image = qr_image
-            lbl_img.pack(padx=8, pady=8)
-
-            tk.Label(qr_win, text=payload, font=("Arial", 12, "bold")).pack(pady=(0, 10))
-            tk.Label(qr_win, text="Scan this QR with your phone app").pack()
-
-            qr_win.lift()
-            qr_win.attributes("-topmost", True)
-            qr_win.after(100, lambda: qr_win.attributes("-topmost", False))
-
+            
             self.log_callback(f"📱 QR shown: {payload}", "Info")
         except Exception as e:
             self.log_callback(f"QR generation failed: {e}", "Error")
