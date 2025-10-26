@@ -94,33 +94,47 @@ def build_ui():
         font=ctk.CTkFont("Consolas", last_font_size),
     )
     input_box.pack(fill="x", padx=10, pady=(0, 10))
-    
-    # Insert placeholder
-    input_box.insert("1.0", PLACEHOLDER_TEXT)
-    input_box._placeholder_active = True
 
-    # Proper placeholder handling
-    def on_focus_in(event):
+    # FIXED: Proper placeholder system
+    input_box._placeholder_active = False
+
+    def reset_placeholder():
+        """Reset to placeholder state"""
+        input_box.delete("1.0", "end")
+        input_box.insert("1.0", PLACEHOLDER_TEXT)
+        input_box._placeholder_active = True
+
+    def clear_placeholder():
+        """Clear placeholder if active"""
         if input_box._placeholder_active:
             input_box.delete("1.0", "end")
             input_box._placeholder_active = False
 
-    def on_focus_out(event):
-        current_text = input_box.get("1.0", "end-1c").strip()
-        if not current_text:
-            input_box.delete("1.0", "end")
-            input_box.insert("1.0", PLACEHOLDER_TEXT)
-            input_box._placeholder_active = True
+    def get_actual_text():
+        """Get text from input box, excluding placeholder"""
+        if input_box._placeholder_active:
+            return ""
+        return input_box.get("1.0", "end-1c").strip()
 
-    def on_key_press(event):
-        # Remove placeholder on first key press if still active
+    # Initial placeholder
+    reset_placeholder()
+
+    # Event handlers
+    def on_focus_in(event):
+        clear_placeholder()
+
+    def on_focus_out(event):
+        if not input_box.get("1.0", "end-1c").strip():
+            reset_placeholder()
+
+    def on_key(event):
+        # If any key pressed while placeholder is active, clear it
         if input_box._placeholder_active and event.char:
-            input_box.delete("1.0", "end")
-            input_box._placeholder_active = False
+            root.after(1, clear_placeholder)
 
     input_box.bind("<FocusIn>", on_focus_in)
     input_box.bind("<FocusOut>", on_focus_out)
-    input_box.bind("<Key>", on_key_press)
+    input_box.bind("<Key>", on_key)
 
     # ===== Button Builder =====
     def make_button(parent, text, color, icon=""):
@@ -156,7 +170,7 @@ def build_ui():
 
     manage_server_btn = make_button(right_frame, "Manage Server", "#6C5B8D", "🌐")
 
-        # ===== Detected =====
+    # ===== Detected =====
     log_results_label = ctk.CTkLabel(
         left_frame, text="📋 DETECTED",
         font=ctk.CTkFont(size=18, weight="bold"),
@@ -183,9 +197,13 @@ def build_ui():
     log_box.pack(fill="both", expand=True, padx=10, pady=(0, 10))
 
     _log_entries = []
-    builtins._shared_log_entries = _log_entries  # share with app.py
+    builtins._shared_log_entries = _log_entries
     _log_label_widgets = []
-    _selected_frame_holder = {"ref": None}  # simple mutable holder for selected frame
+    _selected_frame_holder = {"ref": None}
+    # Store current displayed entry for refresh
+    _current_entry = {"entry": None}
+    # Store current font size for log labels
+    _current_font_size = {"value": last_font_size}
 
     def _color_for_label(lbl_lower: str) -> str:
         if lbl_lower == "smishing":
@@ -199,11 +217,9 @@ def build_ui():
     def _highlight(frame: ctk.CTkFrame):
         """Single-selection highlight."""
         try:
-            # reset previous
             prev = _selected_frame_holder["ref"]
             if prev and prev.winfo_exists():
                 prev.configure(fg_color=("#E5E5E5", "#2A2A2A"))
-            # set new
             from customtkinter import get_appearance_mode
             mode = get_appearance_mode().lower()
             frame.configure(fg_color=("#B5D3FF" if mode == "light" else "#1E3A5F"))
@@ -212,8 +228,12 @@ def build_ui():
             pass
 
     def _open_details(entry: dict):
-        """Write the entry into the Anatomy/Details text."""
+        """Display entry in Anatomy tab with proper formatting."""
         tabs.set("Anatomy")
+        
+        # Store current entry for refresh
+        _current_entry["entry"] = entry
+        
         details_text.configure(state="normal")
         details_text.delete("1.0", "end")
 
@@ -226,54 +246,191 @@ def build_ui():
         device     = entry.get("device_name", "Unknown")
         sent_time  = entry.get("sent_time", "Unknown")
 
-        # Classification color scheme
-        label_lower = str(label_text).lower()
-        color_map = {
-            "smishing": {"accent": "#ff4d4d", "icon": "🚨"},
-            "spam": {"accent": "#ffcc00", "icon": "⚠️"},
-            "legit": {"accent": "#4caf50", "icon": "✅"},
-            "error": {"accent": "#ff3333", "icon": "❌"},
-            "unknown": {"accent": "#00b0ff", "icon": "ℹ️"},
-        }
-        scheme = color_map.get(label_lower, color_map["unknown"])
-
-        # Detect light/dark mode
+        # Get current settings
         from customtkinter import get_appearance_mode
         mode = get_appearance_mode().lower()
-        base_text = "#EAEAEA" if mode == "dark" else "#1A1A1A"
+        current_size = int(font_size_var.get())
+        
+        # Classification scheme
+        label_lower = str(label_text).lower()
+        if label_lower == "smishing":
+            icon = "🚨"
+            class_color_dark = "#ff6b6b"
+            class_color_light = "#d32f2f"
+        elif label_lower == "spam":
+            icon = "⚠️"
+            class_color_dark = "#ffd93d"
+            class_color_light = "#f57c00"
+        elif label_lower == "legit":
+            icon = "✅"
+            class_color_dark = "#6bcf7f"
+            class_color_light = "#388e3c"
+        else:
+            icon = "ℹ️"
+            class_color_dark = "#00bfff"
+            class_color_light = "#0288d1"
+        
+        # Theme colors
+        if mode == "dark":
+            text_color = "#EAEAEA"
+            info_color = "#00bfff"
+            class_color = class_color_dark
+            warn_color = "#ff6b6b"
+            safe_color = "#6bcf7f"
+        else:
+            text_color = "#1A1A1A"
+            info_color = "#0288d1"
+            class_color = class_color_light
+            warn_color = "#d32f2f"
+            safe_color = "#388e3c"
 
-        # === MESSAGE DETAILS ===
-        details_text.insert("end", "\n📱 MESSAGE DETAILS\n", "header")
-        details_text.insert("end", f"Sender: {sender}\n", "info_text")
-        details_text.insert("end", f"User Phone: {user_phone}\n", "info_text")
-        details_text.insert("end", f"Device: {device}\n", "info_text")
-        details_text.insert("end", f"Time: {sent_time}\n", "info_text")
+        # Build content with proper spacing
+        details_text.insert("end", " MESSAGE DETAILS ", "header")
+        details_text.insert("end", "\n")
+        details_text.insert("end", f"Sender: {sender}\n", "info")
+        details_text.insert("end", f"User Phone: {user_phone}\n", "info")
+        details_text.insert("end", f"Device: {device}\n", "info")
+        details_text.insert("end", f"Time: {sent_time}\n\n", "info")
 
-        # === CLASSIFICATION ===
-        details_text.insert("end", "\n" + scheme["icon"] + " CLASSIFICATION\n", "header")
-        details_text.insert("end", f"{scheme['icon']} {label_text.capitalize()}\n", "classification_text")
+        details_text.insert("end", " CLASSIFICATION ", "header")
+        details_text.insert("end", "\n\n")
+        details_text.insert("end", f"{icon} {label_text.capitalize()}\n\n", "classification")
 
-        # === MESSAGE ===
-        details_text.insert("end", "\n💬 MESSAGE\n", "header")
-        details_text.insert("end", msg_full + "\n", "body_text")
+        details_text.insert("end", " MESSAGE ", "header")
+        details_text.insert("end", "\n\n")
+        details_text.insert("end", f"{msg_full}\n\n", "message")
 
-        # === FEATURES / STATUS ===
         if warnings:
-            details_text.insert("end", "\n⚠️ DETECTED FEATURES\n", "header")
+            details_text.insert("end", " DETECTED FEATURES ", "header")
+            details_text.insert("end", "\n\n")
             for w in warnings:
                 details_text.insert("end", f"• {w}\n", "warning")
         else:
-            details_text.insert("end", "\n✅ STATUS\n", "header")
-            details_text.insert("end", "✅ No suspicious features detected\n", "safe")
+            details_text.insert("end", " STATUS ", "header")
+            details_text.insert("end", "\n\n")
+            details_text.insert("end", "✅ No suspicious features detected", "safe")
 
-        # --- Styling Tags ---
-        details_text.tag_config("header", font=("Consolas", 13, "bold"), foreground="#00b0ff")
-        details_text.tag_config("classification_text", foreground=scheme["accent"], font=("Consolas", 12, "bold"))
-        details_text.tag_config("info_text", foreground="#00bfff", font=("Consolas", 12))
-        details_text.tag_config("body_text", foreground=base_text, font=("Consolas", 12))
-        details_text.tag_config("warning", foreground="#ff6b6b", font=("Consolas", 12))
-        details_text.tag_config("safe", foreground="#4caf50", font=("Consolas", 12, "bold"))
+        # Apply current theme and font to all tags
+        _update_detail_tags(current_size, mode, text_color, info_color, class_color, warn_color, safe_color)
+        
+        details_text.configure(state="disabled")
 
+    def _update_detail_tags(size, mode, text_color, info_color, class_color, warn_color, safe_color):
+        """Update all detail text tags with current theme and font size."""
+        header_bg = "#3a3a3a" if mode == "dark" else "#E0E0E0"
+        header_fg = "#ffffff" if mode == "dark" else "#1A1A1A"
+        
+        details_text.tag_config("header", 
+                               background=header_bg,
+                               foreground=header_fg,
+                               font=("Consolas", size, "bold"))
+        
+        details_text.tag_config("info",
+                               foreground=info_color,
+                               font=("Consolas", size))
+        
+        details_text.tag_config("classification",
+                               foreground=class_color,
+                               font=("Consolas", size + 2, "bold"))
+        
+        details_text.tag_config("message",
+                               foreground=text_color,
+                               font=("Consolas", size))
+        
+        details_text.tag_config("warning",
+                               foreground=warn_color,
+                               font=("Consolas", size))
+        
+        details_text.tag_config("safe",
+                               foreground=safe_color,
+                               font=("Consolas", size, "bold"))
+
+    def _refresh_current_details():
+        """Refresh the currently displayed entry with new theme/font settings WITHOUT switching tabs."""
+        if not _current_entry["entry"]:
+            return
+        
+        entry = _current_entry["entry"]
+        
+        details_text.configure(state="normal")
+        details_text.delete("1.0", "end")
+
+        # Extract message data
+        msg_full   = entry.get("message", "")
+        warnings   = entry.get("warnings", [])
+        label_text = entry.get("label", "Unknown")
+        sender     = entry.get("sender", "Unknown")
+        user_phone = entry.get("user_phone", "Unknown")
+        device     = entry.get("device_name", "Unknown")
+        sent_time  = entry.get("sent_time", "Unknown")
+
+        # Get current settings
+        from customtkinter import get_appearance_mode
+        mode = get_appearance_mode().lower()
+        current_size = int(font_size_var.get())
+        
+        # Classification scheme
+        label_lower = str(label_text).lower()
+        if label_lower == "smishing":
+            icon = "🚨"
+            class_color_dark = "#ff6b6b"
+            class_color_light = "#d32f2f"
+        elif label_lower == "spam":
+            icon = "⚠️"
+            class_color_dark = "#ffd93d"
+            class_color_light = "#f57c00"
+        elif label_lower == "legit":
+            icon = "✅"
+            class_color_dark = "#6bcf7f"
+            class_color_light = "#388e3c"
+        else:
+            icon = "ℹ️"
+            class_color_dark = "#00bfff"
+            class_color_light = "#0288d1"
+        
+        # Theme colors
+        if mode == "dark":
+            text_color = "#EAEAEA"
+            info_color = "#00bfff"
+            class_color = class_color_dark
+            warn_color = "#ff6b6b"
+            safe_color = "#6bcf7f"
+        else:
+            text_color = "#1A1A1A"
+            info_color = "#0288d1"
+            class_color = class_color_light
+            warn_color = "#d32f2f"
+            safe_color = "#388e3c"
+
+        # Build content with proper spacing
+        details_text.insert("end", " MESSAGE DETAILS ", "header")
+        details_text.insert("end", "\n")
+        details_text.insert("end", f"Sender: {sender}\n", "info")
+        details_text.insert("end", f"User Phone: {user_phone}\n", "info")
+        details_text.insert("end", f"Device: {device}\n", "info")
+        details_text.insert("end", f"Time: {sent_time}\n\n", "info")
+
+        details_text.insert("end", " CLASSIFICATION ", "header")
+        details_text.insert("end", "\n\n")
+        details_text.insert("end", f"{icon} {label_text.capitalize()}\n\n", "classification")
+
+        details_text.insert("end", " MESSAGE ", "header")
+        details_text.insert("end", "\n\n")
+        details_text.insert("end", f"{msg_full}\n\n", "message")
+
+        if warnings:
+            details_text.insert("end", " DETECTED FEATURES ", "header")
+            details_text.insert("end", "\n\n")
+            for w in warnings:
+                details_text.insert("end", f"• {w}\n", "warning")
+        else:
+            details_text.insert("end", " STATUS ", "header")
+            details_text.insert("end", "\n\n")
+            details_text.insert("end", "✅ No suspicious features detected", "safe")
+
+        # Apply current theme and font to all tags
+        _update_detail_tags(current_size, mode, text_color, info_color, class_color, warn_color, safe_color)
+        
         details_text.configure(state="disabled")
 
     def _make_row(parent: ctk.CTkScrollableFrame, entry: dict, index: int):
@@ -293,7 +450,7 @@ def build_ui():
             row,
             text=f"[{label}] {preview}",
             text_color=color,
-            font=ctk.CTkFont("Consolas", last_font_size),
+            font=ctk.CTkFont("Consolas", _current_font_size["value"]),
             anchor="w", justify="left", padx=6,
         )
         txt.pack(fill="x", padx=8, pady=6)
@@ -312,7 +469,7 @@ def build_ui():
         row.bind("<Double-Button-1>", _dbl)
         txt.bind("<Double-Button-1>", _dbl)
 
-        # context menu (Save/Append/Delete)
+        # context menu
         import tkinter as tk
         from tkinter import filedialog, messagebox
         menu = tk.Menu(row, tearoff=0)
@@ -354,14 +511,11 @@ def build_ui():
 
         def _delete():
             try:
-                # remove from UI
                 row.destroy()
-                # remove from lists
                 if entry in _log_entries:
                     _log_entries.remove(entry)
                 if hasattr(builtins, "_shared_log_entries") and entry in builtins._shared_log_entries:
                     builtins._shared_log_entries.remove(entry)
-                # re-render current filter
                 _render_list(filter_var.get())
                 messagebox.showinfo("Deleted", "Log entry deleted.")
             except Exception as ex:
@@ -388,8 +542,8 @@ def build_ui():
         """(Re)build visible rows according to the filter."""
         for child in log_box.winfo_children():
             child.destroy()
-        # reset selection
         _selected_frame_holder["ref"] = None
+        _log_label_widgets.clear()
 
         for idx, entry in enumerate(_log_entries):
             lbl = (entry.get("label") or "Unknown").capitalize()
@@ -401,21 +555,22 @@ def build_ui():
 
     filter_menu.configure(command=apply_filter)
 
-    # Public: add new entry from app.py
     def add_log_message(label, full_text, color, entry_data=None):
-        """Append entry and re-render with current filter (no duplicate UI rows)."""
-        # Normalize and store
+        """Append entry and re-render with current filter."""
         if entry_data is None:
             entry_data = {"label": label, "message": full_text, "warnings": []}
         else:
-            # ensure label/message exist
             entry_data.setdefault("label", label)
             entry_data.setdefault("message", full_text)
 
         _log_entries.append(entry_data)
-        # refresh list according to current filter
         _render_list(filter_var.get())
+        
+        # FIXED: Auto-clear placeholder after prediction
+        root.after(100, reset_placeholder)
+        
         return True
+
     # ============================================================== #
     #                      LOG DETAILS TAB (ANATOMY)                 #
     # ============================================================== #
@@ -428,7 +583,6 @@ def build_ui():
     )
     log_label.pack(anchor="w", padx=10, pady=(10, 5))
 
-    # Use regular Tkinter Text widget for color support
     import tkinter as tk
 
     details_text_frame = ctk.CTkFrame(log_frame, corner_radius=10)
@@ -439,29 +593,17 @@ def build_ui():
         height=520,
         wrap="word",
         font=("Consolas", last_font_size),
-        bg="#FFFFFF",
-        fg="#1A1A1A",
-        insertbackground="#1A1A1A",
+        bg="#1A1A1A",
+        fg="#EAEAEA",
+        insertbackground="#EAEAEA",
         relief="flat",
-        padx=10,
-        pady=10,
+        padx=15,
+        pady=15,
         borderwidth=0,
+        cursor="arrow",
     )
     details_text.pack(fill="both", expand=True, padx=2, pady=2)
-
-    # Configure color tags for the text widget
-    details_text.tag_config("red_label", foreground="#ff4d4d", font=("Consolas", last_font_size, "bold"))
-    details_text.tag_config("yellow_label", foreground="#ffcc00", font=("Consolas", last_font_size, "bold"))
-    details_text.tag_config("green_label", foreground="#4caf50", font=("Consolas", last_font_size, "bold"))
-    details_text.tag_config("gray_label", foreground="#808080", font=("Consolas", last_font_size, "bold"))
-    details_text.tag_config("warning", foreground="#ff6b6b")
-    details_text.tag_config("safe", foreground="#4caf50", font=("Consolas", last_font_size, "bold"))
-
-    # Header background colors (like the detected cards)
-    details_text.tag_config("header_classification", background="#3a3a3a", foreground="#ffffff", font=("Consolas", last_font_size, "bold"))
-    details_text.tag_config("header_message", background="#3a3a3a", foreground="#ffffff", font=("Consolas", last_font_size, "bold"))
-    details_text.tag_config("header_features", background="#3a3a3a", foreground="#ffffff", font=("Consolas", last_font_size, "bold"))
-    details_text.tag_config("header_status", background="#3a3a3a", foreground="#ffffff", font=("Consolas", last_font_size, "bold"))
+    details_text.configure(state="disabled")
 
     # ============================================================== #
     #                      SETTINGS TAB                              #
@@ -473,7 +615,7 @@ def build_ui():
     center_frame.place(relx=0.5, rely=0.5, anchor="center")
 
     ctk.CTkLabel(
-        center_frame, text="",
+        center_frame, text="⚙️ Settings",
         font=ctk.CTkFont(size=20, weight="bold"),
     ).pack(pady=(0, 15))
 
@@ -509,18 +651,16 @@ def build_ui():
 
     # ================== Theme / Font Updaters ================== #
     def _apply_palette(mode: str):
-        """Paints all widgets using a compact light/dark palette."""
+        """Apply theme colors to all widgets."""
         palettes = {
             "dark":  {"bg": "#0E0E0E", "frame": "#1A1A1A", "inner": "#222222", "text": "#EAEAEA"},
             "light": {"bg": "#FAFAFA", "frame": "#EFEFEF", "inner": "#FFFFFF", "text": "#1A1A1A"},
         }
         C = palettes["dark" if mode == "dark" else "light"]
 
-        # Root + status
         root.configure(fg_color=C["bg"])
         status_bar.configure(fg_color=C["bg"], text_color=C["text"])
 
-        # Tabview internals
         try:
             tabs.configure(fg_color=C["frame"])
             if hasattr(tabs, "_border_frame"):
@@ -539,44 +679,35 @@ def build_ui():
         except Exception:
             pass
 
-        # Frames
-        for f in [
-            detect_tab, log_tab, settings_tab,
-            detect_container, left_frame, right_frame,
-            log_frame, settings_frame, center_frame,
-        ]:
+        for f in [detect_tab, log_tab, settings_tab, detect_container, left_frame, 
+                  right_frame, log_frame, settings_frame, center_frame]:
             f.configure(fg_color=C["frame"])
 
-        # Scrollable frame
         log_box.configure(fg_color=C["inner"])
         for attr in ("scrollable_frame", "_scrollable_frame", "_frame"):
             inner = getattr(log_box, attr, None)
             if inner:
                 inner.configure(fg_color=C["inner"])
 
-        # Textboxes
         input_box.configure(fg_color=C["inner"], text_color=C["text"])
         filter_menu.configure(fg_color=C["inner"], text_color=C["text"])
         
-        # Update tk.Text widget colors
-        try:
-            details_text.config(bg=C["inner"], fg=C["text"], insertbackground=C["text"])
-        except Exception:
-            pass
+        # Update details text widget
+        details_text.config(bg=C["inner"], fg=C["text"], insertbackground=C["text"])
 
-        # Labels
         for lbl in [title_label, log_results_label, log_results_hint, log_label]:
             lbl.configure(text_color=C["text"])
 
-        # Section headers stay blue
         for blue_lbl in [ra_label, nc_label]:
             blue_lbl.configure(text_color="#00b0ff")
 
         root.update_idletasks()
-        status_bar.configure(text=f"Theme: {theme_var.get()}")
+        
+        # Refresh anatomy content with new theme
+        _refresh_current_details()
 
     def refresh_theme():
-        """Reliable theme switcher for Light / Dark / System."""
+        """Switch theme and refresh UI."""
         choice = theme_var.get().lower()
 
         def apply_resolved():
@@ -597,44 +728,43 @@ def build_ui():
             status_bar.configure(text=f"Theme: {theme_var.get()}")
 
     def update_font_size(_=None):
+        """FIXED: Update font size immediately for all components."""
         new_size = int(font_size_var.get())
-        # Update CTk textbox
+        
+        # Update current font size tracker
+        _current_font_size["value"] = new_size
+        
+        # Update input box
         input_box.configure(font=ctk.CTkFont("Consolas", new_size))
         
-        # Update tk.Text widget
+        # Update details text
         details_text.config(font=("Consolas", new_size))
-        
-        # Update color tags with new font size
-        details_text.tag_config("red_label", foreground="#ff4d4d", font=("Consolas", new_size, "bold"))
-        details_text.tag_config("yellow_label", foreground="#ffcc00", font=("Consolas", new_size, "bold"))
-        details_text.tag_config("green_label", foreground="#4caf50", font=("Consolas", new_size, "bold"))
-        details_text.tag_config("gray_label", foreground="#808080", font=("Consolas", new_size, "bold"))
-        details_text.tag_config("safe", foreground="#4caf50", font=("Consolas", new_size, "bold"))
-        details_text.tag_config("info_text", foreground="#00bfff", font=("Consolas", new_size))
-        details_text.tag_config("header_classification", background="#3a3a3a", foreground="#ffffff", font=("Consolas", new_size, "bold"))
-        details_text.tag_config("header_message", background="#3a3a3a", foreground="#ffffff", font=("Consolas", new_size, "bold"))
-        details_text.tag_config("header_features", background="#3a3a3a", foreground="#ffffff", font=("Consolas", new_size, "bold"))
-        details_text.tag_config("header_status", background="#3a3a3a", foreground="#ffffff", font=("Consolas", new_size, "bold"))
 
-        # Update existing log labels
+        # FIXED: Update ALL existing log label widgets immediately
         for lbl in _log_label_widgets:
-            lbl.configure(font=ctk.CTkFont("Consolas", new_size))
+            try:
+                if lbl.winfo_exists():
+                    lbl.configure(font=ctk.CTkFont("Consolas", new_size))
+            except Exception:
+                pass
 
+        # Save settings
         settings["font_size"] = new_size
         save_user_settings(settings)
         status_bar.configure(text=f"Font size: {new_size}")
+        
+        # Refresh anatomy content with new font size
+        _refresh_current_details()
 
     def update_auto_save():
         settings["auto_save"] = auto_save_var.get()
         save_user_settings(settings)
         status_bar.configure(text=f"Auto Save: {auto_save_var.get().title()}")
 
-    # Live updates
     font_slider.configure(command=update_font_size)
     theme_menu.configure(command=lambda *_: refresh_theme())
     auto_save_switch.configure(command=update_auto_save)
 
-    # First paint
     root.after(30, refresh_theme)
 
     return {
@@ -656,6 +786,8 @@ def build_ui():
         "status_bar": status_bar,
         "add_log_message": add_log_message,
         "log_entries": _log_entries,
+        "reset_placeholder": reset_placeholder,
+        "get_actual_text": get_actual_text,
     }
 
 if __name__ == "__main__":

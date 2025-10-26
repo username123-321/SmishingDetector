@@ -12,53 +12,76 @@ from components.network_sms_receiver import NetworkSMSReceiver, PORT
 import socket
 import customtkinter as ctk
 import qrcode
-from PIL import Image, ImageTk
-import io
+from PIL import ImageTk
+from design import build_ui, load_user_settings
 
-# Import the UI builder from design.py
-from design import build_ui, load_user_settings, save_user_settings
+# ============================================================== #
+#                    RESOURCE & PATH MANAGEMENT                  #
+# ============================================================== #
 
-# Resource path helper for PyInstaller
 def resource_path(relative_path):
+    """Get absolute path to resource, works for dev and PyInstaller."""
     try:
         base_path = sys._MEIPASS
     except Exception:
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
 
-# Paths
+
 MODEL_PATH = resource_path("model/sms_model.joblib")
 VECTORIZER_PATH = resource_path('model/tfidf_vectorizer.joblib')
 
-# Load model
+# ============================================================== #
+#                    MODEL INITIALIZATION                        #
+# ============================================================== #
+
 MODEL = None
 VECTORIZER = None
 
-if os.path.exists(MODEL_PATH):
+def load_model():
+    """Load the ML model and vectorizer."""
+    global MODEL, VECTORIZER
+    
+    if not os.path.exists(MODEL_PATH):
+        print(f"WARNING: Model file '{MODEL_PATH}' not found. Prediction disabled.")
+        return False
+    
     try:
         MODEL = joblib.load(MODEL_PATH)
         VECTORIZER = joblib.load(VECTORIZER_PATH)
+        return True
     except Exception as e:
         print(f"WARNING: Failed to load model bundle:\n{e}")
-else:
-    print(f"WARNING: Model file '{MODEL_PATH}' not found. Prediction disabled.")
+        return False
 
-# Global state
+
+load_model()
+
+# ============================================================== #
+#                    GLOBAL STATE                                #
+# ============================================================== #
+
 network_manager = None
 details_dict = {}
 
-# ----------------- Helper Functions -----------------
 def add_detail(detail_name, detail):
+    """Store SMS metadata."""
     global details_dict
     details_dict[detail_name] = detail
 
+
 def take_details(user, device_name, sent_time):
+    """Store user, device, and time details."""
     add_detail("user_phone", user)
     add_detail("device_name", device_name)
     add_detail("sent_time", sent_time)
 
+# ============================================================== #
+#                    UI HELPER FUNCTIONS                         #
+# ============================================================== #
+
 def show_error_popup(parent, title, message):
-    """Displays an error message in a modal popup window."""
+    """Display error message in a modal popup window."""
     err_win = ctk.CTkToplevel(parent)
     err_win.title(title)
     err_win.geometry("400x200")
@@ -67,7 +90,7 @@ def show_error_popup(parent, title, message):
 
     ctk.CTkLabel(
         err_win,
-        text="⚠️ " + title,
+        text=f"⚠️ {title}",
         text_color="red",
         font=ctk.CTkFont(size=14, weight="bold")
     ).pack(pady=(15, 5))
@@ -85,15 +108,65 @@ def show_error_popup(parent, title, message):
         hover_color="#cc0000"
     ).pack(pady=(0, 10))
 
-# ----------------- Core Prediction Logic -----------------
+# ============================================================== #
+#                    CORE PREDICTION LOGIC                       #
+# ============================================================== #
+
+def extract_features(text):
+    """Extract URLs, emails, phone numbers, and domains from text."""
+    return {
+        'urls': detect_urls(text),
+        'emails': detect_emails(text),
+        'phones': detect_phone_numbers(text),
+        'domains': detect_domains(text)
+    }
+
+
+def build_warnings_list(features):
+    """Build a list of warning messages from extracted features."""
+    warnings = []
+    
+    if features['urls']:
+        warnings.append(f"URLs detected: {', '.join(features['urls'])}")
+    if features['emails']:
+        warnings.append(f"Emails detected: {', '.join(features['emails'])}")
+    if features['phones']:
+        warnings.append(f"Phone numbers detected: {', '.join(features['phones'])}")
+    if features['domains']:
+        warnings.append(f"Suspicious domains: {', '.join(features['domains'])}")
+    
+    return warnings
+
+
+def get_label_color(label):
+    """Get color code based on classification label."""
+    label_lower = label.lower()
+    
+    if label_lower == "smishing":
+        return "#ff4d4d"
+    elif label_lower == "spam":
+        return "#ffcc00"
+    else:  # Legit
+        return "#4caf50"
+
+
 def process_message_for_prediction(sms, sender="Unknown", ui_components=None):
-    """Core logic for cleaning, predicting, and logging a message."""
+    """
+    Core logic for cleaning, predicting, and logging a message.
+    
+    Args:
+        sms: Either a dict with 'sender' and 'message' keys, or a string
+        sender: Sender identifier (default: "Unknown")
+        ui_components: Dictionary of UI components
+    """
+    # Parse input
     if isinstance(sms, dict):
         sender = sms.get('sender', 'Unknown')
         text = sms['message']
     else:
         text = sms
 
+    # Validate model
     if MODEL is None or VECTORIZER is None:
         show_error_popup(
             parent=ui_components['root'],
@@ -103,45 +176,26 @@ def process_message_for_prediction(sms, sender="Unknown", ui_components=None):
         return
 
     # Extract features
-    urls = detect_urls(text)
-    emails = detect_emails(text)
-    phones = detect_phone_numbers(text)
-    domains = detect_domains(text)
-
+    features = extract_features(text)
     text_clean = clean_text(text)
     labels = ['ham', 'smishing', 'spam']
     
     try:
+        # Predict
         X = VECTORIZER.transform([text_clean])
-        label = MODEL.predict(X)[0]
-        label = labels[label]
-        label_display = "Legit" if str(label).lower() == "ham" else str(label).capitalize()
+        label_idx = MODEL.predict(X)[0]
+        label = labels[label_idx]
+        label_display = "Legit" if label.lower() == "ham" else label.capitalize()
         
-        # User verification for non-legit messages
+        # User verification for suspicious messages
         if label_display != "Legit":
             verifier = UserVerification(ui_components['root'], text, label_display)
             label_display = verifier.ask_user(sender)
         
-        # Build warnings list
-        warnings_list = []
-        if urls:
-            warnings_list.append("URLs detected: " + ", ".join(urls))
-        if emails:
-            warnings_list.append("Emails detected: " + ", ".join(emails))
-        if phones:
-            warnings_list.append("Phone numbers detected: " + ", ".join(phones))
-        if domains:
-            warnings_list.append("Suspicious domains: " + ", ".join(domains))
-
-        # Determine color based on label
-        if label_display.lower() == "smishing":
-            color = "#ff4d4d"
-        elif label_display.lower() == "spam":
-            color = "#ffcc00"
-        else:  # Legit
-            color = "#4caf50"
-
-        # Add to log using design.py's add_log_message
+        # Build warnings and entry data
+        warnings_list = build_warnings_list(features)
+        color = get_label_color(label_display)
+        
         entry_data = {
             "message": text,
             "label": label_display,
@@ -152,6 +206,7 @@ def process_message_for_prediction(sms, sender="Unknown", ui_components=None):
             "sent_time": details_dict.get("sent_time", "Unknown")
         }
         
+        # Log the result
         ui_components['add_log_message'](label_display, text, color, entry_data)
         ui_components['status_bar'].configure(text=f"✅ Analyzed: {label_display}")
         
@@ -162,14 +217,15 @@ def process_message_for_prediction(sms, sender="Unknown", ui_components=None):
             message=f"Prediction failed for message from {sender}: {e}"
         )
 
-# ----------------- UI Action Handlers -----------------
+# ============================================================== #
+#                    UI ACTION HANDLERS                          #
+# ============================================================== #
+
 def predict_action(ui_components):
-    """Handles prediction for manual text input."""
-    text = ui_components['input_box'].get("1.0", "end-1c").strip()
+    """Handle prediction for manual text input."""
+    text = ui_components['get_actual_text']()
     
-    # Check for placeholder text
-    PLACEHOLDER_TEXT = "Type here..."
-    if not text or text == PLACEHOLDER_TEXT:
+    if not text:
         messagebox.showwarning("Warning", "Enter a message first")
         return
 
@@ -182,45 +238,68 @@ def predict_action(ui_components):
         return
 
     process_message_for_prediction(text, sender="Manual Input", ui_components=ui_components)
-    
-    # Clear input and restore placeholder
-    ui_components['input_box'].delete("1.0", "end")
-    ui_components['input_box'].insert("1.0", PLACEHOLDER_TEXT)
+
 
 def clear_input_action(ui_components):
-    """Clear the input box."""
-    PLACEHOLDER_TEXT = "Type here..."
+    """Clear the input box and reset placeholder."""
     ui_components['input_box'].delete("1.0", "end")
-    ui_components['input_box'].insert("1.0", PLACEHOLDER_TEXT)
+    ui_components['input_box']._placeholder_active = False
+    ui_components['reset_placeholder']()
+    ui_components['status_bar'].configure(text="Input cleared")
+
 
 def load_image_action(ui_components):
     """Load image and extract text via OCR."""
     file_path = filedialog.askopenfilename(
+        title="Select SMS Screenshot",
         filetypes=[("Image files", "*.png;*.jpg;*.jpeg;*.bmp")]
     )
     if not file_path:
         return
 
     def insert_text(text):
+        """Callback to insert extracted text into input box."""
+        # Clear placeholder first
         ui_components['input_box'].delete("1.0", "end")
-        ui_components['input_box'].insert("end", text)
+        ui_components['input_box']._placeholder_active = False
+        
+        # Insert the extracted text
+        ui_components['input_box'].insert("1.0", text)
+        
+        # Update status bar
+        ui_components['status_bar'].configure(text="✅ Text extracted from image")
 
-    SMSCropper(ui_components['root'], file_path, insert_text)
+    try:
+        SMSCropper(ui_components['root'], file_path, insert_text)
+    except Exception as e:
+        show_error_popup(
+            parent=ui_components['root'],
+            title="Image Load Error",
+            message=f"Failed to load image:\n{str(e)}"
+        )
 
-# ----------------- Network Management -----------------
+# ============================================================== #
+#                    NETWORK MANAGEMENT                          #
+# ============================================================== #
+
 def on_sms_received_callback(sms_message, ui_components):
     """Callback when SMS is received via network."""
-    message = sms_message['message']
-    sender = sms_message['sender']
-    user = sms_message['phoneNumber']
-    device_name = sms_message['deviceName']
-    sent_time = sms_message['time']
+    take_details(
+        sms_message['phoneNumber'],
+        sms_message['deviceName'],
+        sms_message['time']
+    )
     
-    take_details(user, device_name, sent_time)
-    process_message_for_prediction(message, sender=sender, ui_components=ui_components)
+    process_message_for_prediction(
+        sms_message['message'],
+        sender=sms_message['sender'],
+        ui_components=ui_components
+    )
+
 
 class NetworkConnectWindow(ctk.CTkToplevel):
     """Network connection management window with QR code."""
+    
     def __init__(self, master, manager, ui_components):
         super().__init__(master)
         self.manager = manager
@@ -234,14 +313,7 @@ class NetworkConnectWindow(ctk.CTkToplevel):
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         
         # Get local IP
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            self.host_ip = s.getsockname()[0]
-            s.close()
-        except:
-            self.host_ip = "0.0.0.0"
-        
+        self.host_ip = self._get_local_ip()
         self.port = PORT
         self.connection_url = f"http://{self.host_ip}:{self.port}"
         
@@ -252,7 +324,19 @@ class NetworkConnectWindow(ctk.CTkToplevel):
         
         self.update_status("Stopped")
 
+    def _get_local_ip(self):
+        """Get the local IP address of the machine."""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except:
+            return "0.0.0.0"
+
     def _create_widgets(self):
+        """Create UI components for network window."""
         # Title
         ctk.CTkLabel(
             self,
@@ -337,15 +421,29 @@ class NetworkConnectWindow(ctk.CTkToplevel):
         
         if "Listening" in new_status or "Connected" in new_status:
             status_color = "green" if "Connected" in new_status else "yellow"
-            self.status_label.configure(text=f"Status: {new_status}", text_color=status_color)
-            self.toggle_btn.configure(text="Stop Server", fg_color="#dc3545", hover_color="#c82333")
+            self.status_label.configure(
+                text=f"Status: {new_status}",
+                text_color=status_color
+            )
+            self.toggle_btn.configure(
+                text="Stop Server",
+                fg_color="#dc3545",
+                hover_color="#c82333"
+            )
         else:
             status_color = "red" if "Error" in new_status else "yellow"
-            self.status_label.configure(text=f"Status: {new_status}", text_color=status_color)
-            self.toggle_btn.configure(text="Start Server", fg_color="#28a745", hover_color="#218838")
+            self.status_label.configure(
+                text=f"Status: {new_status}",
+                text_color=status_color
+            )
+            self.toggle_btn.configure(
+                text="Start Server",
+                fg_color="#28a745",
+                hover_color="#218838"
+            )
 
     def _toggle_server(self):
-        """Toggle server state."""
+        """Toggle server state between running and stopped."""
         if not self.manager:
             return
         
@@ -355,30 +453,32 @@ class NetworkConnectWindow(ctk.CTkToplevel):
             self.manager.start_server()
 
     def on_close(self):
-        """Handle window close."""
+        """Handle window close event."""
         if self.manager and self.manager.is_running:
             self.manager.stop_server()
         
         self.ui_components['manage_server_btn'].configure(state="normal")
         self.destroy()
 
+
 def manage_server_action(ui_components):
     """Open network management window."""
     global network_manager
     
-    # Check if window is already open
-    if hasattr(manage_server_action, 'window') and manage_server_action.window and manage_server_action.window.winfo_exists():
-        manage_server_action.window.lift()  # Bring existing window to front
+    # Prevent multiple windows
+    if hasattr(manage_server_action, 'window') and \
+       manage_server_action.window and \
+       manage_server_action.window.winfo_exists():
+        manage_server_action.window.lift()
         return
     
+    # Initialize network manager if needed
     if network_manager is None:
         try:
-            # Create callback wrapper that includes ui_components
             def wrapped_callback(sms_msg):
                 on_sms_received_callback(sms_msg, ui_components)
             
             def wrapped_log(msg, label):
-                # Use status bar for network logs
                 ui_components['status_bar'].configure(text=f"{label}: {msg}")
             
             network_manager = NetworkSMSReceiver(
@@ -394,69 +494,17 @@ def manage_server_action(ui_components):
             )
             return
     
-    manage_server_action.window = NetworkConnectWindow(ui_components['root'], network_manager, ui_components)
+    # Create and show window
+    manage_server_action.window = NetworkConnectWindow(
+        ui_components['root'],
+        network_manager,
+        ui_components
+    )
     ui_components['manage_server_btn'].configure(state="disabled")
 
-# ----------------- Application Cleanup -----------------
-def on_closing(ui_components):
-    """Handle application closing with conditional save prompt."""
-    global network_manager
-    
-    # Get current settings
-    settings = load_user_settings()
-    auto_save = settings.get("auto_save", "off")
-    
-    # Check if there are logs to save
-    has_logs = hasattr(builtins, '_shared_log_entries') and builtins._shared_log_entries
-    
-    if has_logs:
-        if auto_save == "on":
-            # Auto-save is enabled - directly ask for file location
-            file_path = filedialog.asksaveasfilename(
-                defaultextension=".txt",
-                filetypes=[("Text Files", "*.txt")],
-                title="Auto-Save: Choose location and filename",
-                initialfile="sms_logs.txt"
-            )
-            
-            if file_path:  # User selected a location
-                save_logs_to_file(file_path, ui_components)
-            else:  # User cancelled
-                result = messagebox.askyesno(
-                    "Exit Without Saving?",
-                    "You cancelled the auto-save. Do you still want to exit without saving?"
-                )
-                if not result:
-                    return  # Don't exit
-        else:
-            # Auto-save is disabled - inform and ask
-            result = messagebox.askyesnocancel(
-                "Save Predictions?",
-                "Auto-save is disabled. Your predictions will not be saved.\n\n"
-                "Do you want to save them before exiting?\n\n"
-                "• Yes: Save predictions\n"
-                "• No: Exit without saving\n"
-                "• Cancel: Return to application"
-            )
-            
-            if result is True:  # Yes - save
-                file_path = filedialog.asksaveasfilename(
-                    defaultextension=".txt",
-                    filetypes=[("Text Files", "*.txt")],
-                    title="Save Predictions",
-                    initialfile="sms_logs.txt"
-                )
-                if file_path:
-                    save_logs_to_file(file_path, ui_components)
-            elif result is None:  # Cancel - don't exit
-                return
-            # If No, continue to exit
-    
-    # Stop network manager
-    if network_manager and isinstance(network_manager, NetworkSMSReceiver):
-        network_manager.stop_server()
-    
-    ui_components['root'].destroy()
+# ============================================================== #
+#                    APPLICATION LIFECYCLE                       #
+# ============================================================== #
 
 def save_logs_to_file(file_path, ui_components):
     """Save all logs to the specified file."""
@@ -491,29 +539,104 @@ def save_logs_to_file(file_path, ui_components):
                 f.write("\n")
         
         messagebox.showinfo("Saved", f"Logs saved successfully to:\n{file_path}")
-        ui_components['status_bar'].configure(text=f"✅ Logs saved to {os.path.basename(file_path)}")
+        ui_components['status_bar'].configure(
+            text=f"✅ Logs saved to {os.path.basename(file_path)}"
+        )
     except Exception as e:
         messagebox.showerror("Error", f"Failed to save logs:\n{e}")
 
-# ----------------- Main Application -----------------
+
+def on_closing(ui_components):
+    """Handle application closing with conditional save prompt."""
+    global network_manager
+    
+    settings = load_user_settings()
+    auto_save = settings.get("auto_save", "off")
+    has_logs = hasattr(builtins, '_shared_log_entries') and builtins._shared_log_entries
+    
+    if has_logs:
+        if auto_save == "on":
+            # Auto-save enabled - ask for file location
+            file_path = filedialog.asksaveasfilename(
+                defaultextension=".txt",
+                filetypes=[("Text Files", "*.txt")],
+                title="Auto-Save: Choose location and filename",
+                initialfile="sms_logs.txt"
+            )
+            
+            if file_path:
+                save_logs_to_file(file_path, ui_components)
+            else:
+                result = messagebox.askyesno(
+                    "Exit Without Saving?",
+                    "You cancelled the auto-save. Do you still want to exit without saving?"
+                )
+                if not result:
+                    return
+        else:
+            # Auto-save disabled - inform and ask
+            result = messagebox.askyesnocancel(
+                "Save Predictions?",
+                "Auto-save is disabled. Your predictions will not be saved.\n\n"
+                "Do you want to save them before exiting?\n\n"
+                "• Yes: Save predictions\n"
+                "• No: Exit without saving\n"
+                "• Cancel: Return to application"
+            )
+            
+            if result is True:
+                file_path = filedialog.asksaveasfilename(
+                    defaultextension=".txt",
+                    filetypes=[("Text Files", "*.txt")],
+                    title="Save Predictions",
+                    initialfile="sms_logs.txt"
+                )
+                if file_path:
+                    save_logs_to_file(file_path, ui_components)
+            elif result is None:
+                return
+    
+    # Stop network manager
+    if network_manager and isinstance(network_manager, NetworkSMSReceiver):
+        network_manager.stop_server()
+    
+    ui_components['root'].destroy()
+
+# ============================================================== #
+#                    MAIN APPLICATION ENTRY                      #
+# ============================================================== #
+
 def main():
-    # Build UI using design.py
+    """Main application entry point."""
+    # Build UI
     ui_components = build_ui()
     
-    # Wire up button actions to app.py functions
-    ui_components['predict_btn'].configure(command=lambda: predict_action(ui_components))
-    ui_components['clear_btn'].configure(command=lambda: clear_input_action(ui_components))
-    ui_components['load_image_btn'].configure(command=lambda: load_image_action(ui_components))
-    ui_components['manage_server_btn'].configure(command=lambda: manage_server_action(ui_components))
+    # Wire up button actions
+    ui_components['predict_btn'].configure(
+        command=lambda: predict_action(ui_components)
+    )
+    ui_components['clear_btn'].configure(
+        command=lambda: clear_input_action(ui_components)
+    )
+    ui_components['load_image_btn'].configure(
+        command=lambda: load_image_action(ui_components)
+    )
+    ui_components['manage_server_btn'].configure(
+        command=lambda: manage_server_action(ui_components)
+    )
     
     # Set up window close protocol
-    ui_components['root'].protocol("WM_DELETE_WINDOW", lambda: on_closing(ui_components))
+    ui_components['root'].protocol(
+        "WM_DELETE_WINDOW",
+        lambda: on_closing(ui_components)
+    )
     
     # Show intro screen
-    intro = IntroScreen(ui_components['root'], duration=3000)
+    IntroScreen(ui_components['root'], duration=3000)
     
     # Start the application
     ui_components['root'].mainloop()
+
 
 if __name__ == "__main__":
     main()
